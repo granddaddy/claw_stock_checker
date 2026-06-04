@@ -15,6 +15,10 @@ $preferredSources = @(
     'barrons.com'
 )
 
+if (-not (Test-Path -Path $ArticleRoot)) {
+    New-Item -ItemType Directory -Path $ArticleRoot | Out-Null
+}
+
 function Invoke-TextRequest {
     param([string]$Uri)
     return (Invoke-WebRequest -Uri $Uri -UseBasicParsing -Headers $headers).Content
@@ -175,7 +179,13 @@ function Save-Article {
 
     $articlePublished = $Article.Published
     if (-not (Test-NewsDateInScope -Published $articlePublished) -and -not [string]::IsNullOrWhiteSpace($articlePublished)) {
-        return $null
+        return [pscustomobject]@{
+            Status = 'Skipped: outside current/prior-day window'
+            HtmlPath = ''
+            TextPath = ''
+            Summary = ''
+            Title = $Article.Title
+        }
     }
 
     if (-not (Test-Path -Path $ArticleRoot)) {
@@ -195,7 +205,13 @@ function Save-Article {
             Set-Content -Path $htmlPath -Value $html -Encoding UTF8
         }
         catch {
-            return $null
+            return [pscustomobject]@{
+                Status = "Download failed: $($_.Exception.Message)"
+                HtmlPath = ''
+                TextPath = ''
+                Summary = ''
+                Title = $Article.Title
+            }
         }
     }
 
@@ -205,7 +221,13 @@ function Save-Article {
     }
 
     if (-not (Test-NewsDateInScope -Published $articlePublished)) {
-        return $null
+        return [pscustomobject]@{
+            Status = 'Skipped: article page date outside current/prior-day window'
+            HtmlPath = $htmlPath
+            TextPath = ''
+            Summary = ''
+            Title = $Article.Title
+        }
     }
 
     $needsTextExtraction = -not (Test-Path -Path $textPath)
@@ -227,9 +249,11 @@ function Save-Article {
 
     $summaryText = Get-Content -Path $textPath -Raw -Encoding UTF8
     return [pscustomobject]@{
+        Status = 'Downloaded'
         HtmlPath = $htmlPath
         TextPath = $textPath
         Summary = Get-FirstWords -Text $summaryText -Count 100
+        Title = $Article.Title
     }
 }
 
@@ -408,56 +432,19 @@ function Get-NewsCatalysts {
     return $allItems
 }
 
-function Get-Sentiment {
-    param(
-        [double]$Pct,
-        [double]$Ytd,
-        [object[]]$News
-    )
-
-    $newsText = (($News | ForEach-Object { $_.Title }) -join ' ').ToLowerInvariant()
-
-    if ($Pct -ge 2) {
-        if ($newsText -match 'upgrade|raises|raised|buy|outperform|surges|jumps|rallies|ai|cloud|partnership|launch|beats') {
-            return 'Bullish intraday'
-        }
-        return 'Bullish / momentum-driven'
-    }
-
-    if ($Pct -le -2) {
-        if ($newsText -match 'downgrade|cuts|cut|falls|sinks|selloff|concern|probe|lawsuit|weak|miss|pressure') {
-            return 'Bearish intraday'
-        }
-        return 'Bearish / profit-taking'
-    }
-
-    if ($Pct -gt 0) {
-        if ($Ytd -gt 20) { return 'Bullish but consolidating' }
-        return 'Mixed-to-positive'
-    }
-
-    if ($Pct -lt 0) {
-        if ($Ytd -gt 20) { return 'Bullish longer-term, soft intraday' }
-        return 'Mixed / cautious'
-    }
-
-    return 'Mixed / flat'
-}
-
-function Format-Catalysts {
+function Format-ArticleTitles {
     param([object[]]$News)
 
     if (-not $News -or $News.Count -eq 0) {
-        return 'No clear fresh catalyst found; sentiment based on price action/technical context only.'
+        return ''
     }
 
     $items = $News |
-        Select-Object -First 2 |
         ForEach-Object {
             "$($_.Source): `"$($_.Title)`""
         }
 
-    return [string]::Join('; ', $items)
+    return [string]::Join('<br>', $items)
 }
 
 function Save-ArticlesForTicker {
@@ -477,21 +464,29 @@ function Save-ArticlesForTicker {
     return $saved
 }
 
-function Format-ArticleSummary {
+function Format-DownloadStatus {
     param([object[]]$SavedArticles)
 
     if (-not $SavedArticles -or $SavedArticles.Count -eq 0) {
         return ''
     }
 
-    $combined = (($SavedArticles | ForEach-Object { $_.Summary }) -join ' ')
-    return Get-FirstWords -Text $combined -Count 100
+    $items = $SavedArticles |
+        ForEach-Object {
+            if ($_.Status -eq 'Downloaded' -and -not [string]::IsNullOrWhiteSpace($_.TextPath)) {
+                "Downloaded: $(Split-Path -Path $_.TextPath -Leaf)"
+            }
+            else {
+                "$($_.Status): $($_.Title)"
+            }
+        }
+
+    return [string]::Join('<br>', $items)
 }
 
 $quotes = Get-QuoteData -Tickers $Symbols
 $rows = foreach ($quote in $quotes) {
     $pct = [double]$quote.change_pct
-    $ytd = if ($quote.FundamentalData.PDYTDPCHG) { [double]$quote.FundamentalData.PDYTDPCHG } else { 0 }
     $news = Get-NewsCatalysts -Ticker $quote.symbol -CompanyName $quote.name -Limit $NewsPerTicker
     $savedArticles = Save-ArticlesForTicker -Ticker $quote.symbol -News $news
 
@@ -499,24 +494,18 @@ $rows = foreach ($quote in $quotes) {
         Ticker = $quote.symbol
         Price = ('${0:N2}' -f [double]$quote.last)
         Intraday = ('{0:+0.00;-0.00;0.00}%' -f $pct)
-        Sentiment = Get-Sentiment -Pct $pct -Ytd $ytd -News $news
-        Catalysts = Format-Catalysts -News $news
-        ArticleSummary = Format-ArticleSummary -SavedArticles $savedArticles
+        ArticleTitles = Format-ArticleTitles -News $news
+        DownloadStatus = Format-DownloadStatus -SavedArticles $savedArticles
     }
 }
 
 $lines = @(
-    '| Ticker | Latest price | Intraday % | Sentiment | Concrete news / analyst catalysts | Article summary |',
-    '|---|---:|---:|---|---|---|'
+    '| Ticker | Latest price | Intraday % | Article titles | Download status |',
+    '|---|---:|---:|---|---|'
 )
 
 foreach ($row in $rows) {
-    if ([string]::IsNullOrWhiteSpace($row.ArticleSummary)) {
-        $lines += "| **$($row.Ticker)** | $($row.Price) | **$($row.Intraday)** | $($row.Sentiment) | $($row.Catalysts) |  |"
-    }
-    else {
-        $lines += "| **$($row.Ticker)** | $($row.Price) | **$($row.Intraday)** | $($row.Sentiment) | $($row.Catalysts) | $($row.ArticleSummary) |"
-    }
+    $lines += "| **$($row.Ticker)** | $($row.Price) | **$($row.Intraday)** | $($row.ArticleTitles) | $($row.DownloadStatus) |"
 }
 
 $lines -join [Environment]::NewLine
