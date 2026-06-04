@@ -11,7 +11,8 @@ $today = (Get-Date).Date
 $previousDay = $today.AddDays(-1)
 
 $preferredSources = @(
-    'marketwatch.com'
+    'marketwatch.com',
+    'barrons.com'
 )
 
 function Invoke-TextRequest {
@@ -73,6 +74,26 @@ function Get-MetaDescription {
         '<meta[^>]+name=["'']description["''][^>]+content=["'']([^"'']+)["'']',
         '<meta[^>]+content=["'']([^"'']+)["''][^>]+property=["'']og:description["'']',
         '<meta[^>]+content=["'']([^"'']+)["''][^>]+name=["'']description["'']'
+    )
+
+    foreach ($pattern in $patterns) {
+        $match = [regex]::Match($Html, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($match.Success) {
+            return [System.Net.WebUtility]::HtmlDecode($match.Groups[1].Value).Trim()
+        }
+    }
+
+    return ''
+}
+
+function Get-MetaPublishedDate {
+    param([string]$Html)
+
+    $patterns = @(
+        '<meta[^>]+property=["'']article:published_time["''][^>]+content=["'']([^"'']+)["'']',
+        '<meta[^>]+name=["'']article.published["''][^>]+content=["'']([^"'']+)["'']',
+        '<meta[^>]+name=["'']parsely-pub-date["''][^>]+content=["'']([^"'']+)["'']',
+        '<time[^>]+datetime=["'']([^"'']+)["'']'
     )
 
     foreach ($pattern in $patterns) {
@@ -152,7 +173,8 @@ function Save-Article {
         [object]$Article
     )
 
-    if (-not (Test-NewsDateInScope -Published $Article.Published)) {
+    $articlePublished = $Article.Published
+    if (-not (Test-NewsDateInScope -Published $articlePublished) -and -not [string]::IsNullOrWhiteSpace($articlePublished)) {
         return $null
     }
 
@@ -177,6 +199,15 @@ function Save-Article {
         }
     }
 
+    $htmlForDate = Get-Content -Path $htmlPath -Raw -Encoding UTF8
+    if ([string]::IsNullOrWhiteSpace($articlePublished)) {
+        $articlePublished = Get-MetaPublishedDate -Html $htmlForDate
+    }
+
+    if (-not (Test-NewsDateInScope -Published $articlePublished)) {
+        return $null
+    }
+
     $needsTextExtraction = -not (Test-Path -Path $textPath)
     if (-not $needsTextExtraction) {
         $existingText = Get-Content -Path $textPath -Raw -Encoding UTF8
@@ -184,7 +215,7 @@ function Save-Article {
     }
 
     if ($needsTextExtraction) {
-        $html = Get-Content -Path $htmlPath -Raw -Encoding UTF8
+        $html = $htmlForDate
         $text = Convert-HtmlToText -Html $html
         $metaDescription = Get-MetaDescription -Html $html
         $fallback = (($Article.Title, $Article.Description, $metaDescription | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join '. ')
@@ -199,6 +230,20 @@ function Save-Article {
         HtmlPath = $htmlPath
         TextPath = $textPath
         Summary = Get-FirstWords -Text $summaryText -Count 100
+    }
+}
+
+function Get-QuotePageUrl {
+    param(
+        [string]$Ticker,
+        [string]$Source
+    )
+
+    $lowerTicker = $Ticker.ToLowerInvariant()
+    switch ($Source) {
+        'marketwatch.com' { return "https://www.marketwatch.com/investing/stock/$lowerTicker`?mod=search_symbol" }
+        'barrons.com' { return "https://www.barrons.com/market-data/stocks/$lowerTicker`?mod=searchresults_companyquotes&mod=searchbar&search_keywords=$lowerTicker&search_statement_type=suggested" }
+        default { return '' }
     }
 }
 
@@ -250,6 +295,69 @@ function Get-NewsCatalysts {
     $seen = @{}
 
     foreach ($preferredSource in $preferredSources) {
+        $quotePageUrl = Get-QuotePageUrl -Ticker $Ticker -Source $preferredSource
+        if (-not [string]::IsNullOrWhiteSpace($quotePageUrl)) {
+            try {
+                $quotePageHtml = Invoke-TextRequest -Uri $quotePageUrl
+                $linkMatches = [regex]::Matches($quotePageHtml, '<a[^>]+href=["'']([^"'']+)["''][^>]*>(.*?)</a>', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Singleline)
+                $quotePageItems = @(
+                    foreach ($match in $linkMatches) {
+                        $link = [System.Net.WebUtility]::HtmlDecode($match.Groups[1].Value)
+                        $title = Convert-HtmlToText -Html $match.Groups[2].Value
+                        if ([string]::IsNullOrWhiteSpace($title) -or [string]::IsNullOrWhiteSpace($link)) {
+                            continue
+                        }
+                        if ($link -notmatch '^https?://') {
+                            $sourceRoot = if ($preferredSource -eq 'barrons.com') { 'https://www.barrons.com' } else { 'https://www.marketwatch.com' }
+                            if ($link.StartsWith('/')) {
+                                $link = "$sourceRoot$link"
+                            }
+                            else {
+                                continue
+                            }
+                        }
+                        if ($link -notlike "*$preferredSource*" -or $link -notmatch '/(articles|story|news)/') {
+                            continue
+                        }
+
+                        $articlePublished = ''
+                        $articleDescription = ''
+                        try {
+                            $articleHtml = Invoke-TextRequest -Uri $link
+                            $articlePublished = Get-MetaPublishedDate -Html $articleHtml
+                            $articleDescription = Get-MetaDescription -Html $articleHtml
+                        }
+                        catch {
+                            continue
+                        }
+
+                        if (-not (Test-NewsDateInScope -Published $articlePublished)) {
+                            continue
+                        }
+
+                        [pscustomobject]@{
+                            Title = $title
+                            Source = Get-SourceName -Source '' -Link $link
+                            Description = $articleDescription
+                            Published = $articlePublished
+                            Link = $link
+                        }
+                    }
+                )
+
+                foreach ($item in ($quotePageItems | Select-Object -First $Limit)) {
+                    $dedupeKey = if (-not [string]::IsNullOrWhiteSpace($item.Link)) { $item.Link } else { "$($item.Source)|$($item.Title)" }
+                    if (-not $seen.ContainsKey($dedupeKey)) {
+                        $seen[$dedupeKey] = $true
+                        $allItems += $item
+                    }
+                }
+            }
+            catch {
+                # Fall through to source-scoped news search below.
+            }
+        }
+
         $query = [uri]::EscapeDataString("$Ticker $CompanyName stock news analyst today site:$preferredSource")
         $uri = "https://www.bing.com/news/search?q=$query&format=RSS"
 
