@@ -111,8 +111,8 @@ function Test-GenericQuotePageTitle {
         [string]$CompanyName
     )
 
-    $normalizedTitle = ($Title -replace '\s+', ' ').Trim()
-    $normalizedCompany = ($CompanyName -replace '\s+', ' ').Trim()
+    $normalizedTitle = (($Title -replace '[^\p{L}\p{Nd}\s]', '') -replace '\s+', ' ').Trim()
+    $normalizedCompany = (($CompanyName -replace '[^\p{L}\p{Nd}\s]', '') -replace '\s+', ' ').Trim()
 
     return (
         $normalizedTitle -eq $normalizedCompany -or
