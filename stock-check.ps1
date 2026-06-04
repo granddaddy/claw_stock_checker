@@ -11,12 +11,7 @@ $today = (Get-Date).Date
 $previousDay = $today.AddDays(-1)
 
 $preferredSources = @(
-    'wsj.com',
-    'marketwatch.com',
-    'barrons.com',
-    'reuters.com',
-    'finance.yahoo.com',
-    'cnbc.com'
+    'marketwatch.com'
 )
 
 function Invoke-TextRequest {
@@ -278,6 +273,9 @@ function Get-NewsCatalysts {
                         Published = [string]$_.pubDate
                         Link = $link
                     }
+                } |
+                Where-Object {
+                    Test-NewsDateInScope -Published $_.Published
                 } |
                 Where-Object {
                     $searchText = "$($_.Title) $($_.Description)"
