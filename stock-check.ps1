@@ -234,45 +234,51 @@ function Get-NewsCatalysts {
     )
 
     $companyKeyword = (($CompanyName -replace '\b(Inc|Corp|Corporation|Class A|PLC|Platforms|Technology|Technologies|Holdings|Advanced Micro Devices)\b', '') -replace '[^A-Za-z0-9 ]', ' ').Trim().Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) | Select-Object -First 1
-    $sourceFilter = '(' + (($preferredSources | ForEach-Object { "site:$($_)" }) -join ' OR ') + ')'
-    $query = [uri]::EscapeDataString("$Ticker $CompanyName stock news analyst today $sourceFilter")
-    $uri = "https://www.bing.com/news/search?q=$query&format=RSS"
+    $allItems = @()
+    $seen = @{}
 
-    try {
-        [xml]$rss = Invoke-TextRequest -Uri $uri
-    }
-    catch {
-        return @()
-    }
+    foreach ($preferredSource in $preferredSources) {
+        $query = [uri]::EscapeDataString("$Ticker $CompanyName stock news analyst today site:$preferredSource")
+        $uri = "https://www.bing.com/news/search?q=$query&format=RSS"
 
-    $items = @(
-        $rss.rss.channel.item |
-            ForEach-Object {
-                $title = ($_.title -replace '\s+', ' ').Trim()
-                $link = Resolve-NewsLink -Link ([string]$_.link)
-                $source = Get-SourceName -Source $_.source.'#text' -Link $link
-                [pscustomobject]@{
-                    Title = $title
-                    Source = $source
-                    Description = (Convert-HtmlToText -Html ([string]$_.description))
-                    Published = [string]$_.pubDate
-                    Link = $link
-                }
+        try {
+            [xml]$rss = Invoke-TextRequest -Uri $uri
+        }
+        catch {
+            continue
+        }
+
+        $sourceItems = @(
+            $rss.rss.channel.item |
+                ForEach-Object {
+                    $title = ($_.title -replace '\s+', ' ').Trim()
+                    $link = Resolve-NewsLink -Link ([string]$_.link)
+                    $source = Get-SourceName -Source $_.source.'#text' -Link $link
+                    [pscustomobject]@{
+                        Title = $title
+                        Source = $source
+                        Description = (Convert-HtmlToText -Html ([string]$_.description))
+                        Published = [string]$_.pubDate
+                        Link = $link
+                    }
+                } |
+                Where-Object {
+                    $_.Title -match [regex]::Escape($Ticker) -or
+                    (-not [string]::IsNullOrWhiteSpace($companyKeyword) -and $_.Title -match [regex]::Escape($companyKeyword))
+                } |
+                Select-Object -First $Limit
+        )
+
+        foreach ($item in $sourceItems) {
+            $dedupeKey = if (-not [string]::IsNullOrWhiteSpace($item.Link)) { $item.Link } else { "$($item.Source)|$($item.Title)" }
+            if (-not $seen.ContainsKey($dedupeKey)) {
+                $seen[$dedupeKey] = $true
+                $allItems += $item
             }
-    )
-
-    $filtered = @(
-        $items | Where-Object {
-            $_.Title -match [regex]::Escape($Ticker) -or
-            (-not [string]::IsNullOrWhiteSpace($companyKeyword) -and $_.Title -match [regex]::Escape($companyKeyword))
-        } | Select-Object -First $Limit
-    )
-
-    if ($filtered.Count -gt 0) {
-        return $filtered
+        }
     }
 
-    return @($items | Select-Object -First $Limit)
+    return $allItems
 }
 
 function Get-Sentiment {
@@ -334,7 +340,7 @@ function Save-ArticlesForTicker {
     )
 
     $saved = @()
-    foreach ($article in ($News | Select-Object -First $NewsPerTicker)) {
+    foreach ($article in $News) {
         $savedArticle = Save-Article -Ticker $Ticker -Article $article
         if ($null -ne $savedArticle) {
             $saved += $savedArticle
