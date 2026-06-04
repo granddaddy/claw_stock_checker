@@ -1,6 +1,6 @@
 param(
     [string[]]$Symbols = @('AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'NVDA', 'TSLA', 'AMD', 'CRWV', 'ARM', 'MU'),
-    [int]$NewsPerTicker = 3,
+    [int]$NewsPerTicker = 10,
     [string]$ArticleRoot = (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'StockCheckArticles')
 )
 
@@ -105,6 +105,22 @@ function Test-LowQualityArticleText {
     )
 }
 
+function Test-GenericQuotePageTitle {
+    param(
+        [string]$Title,
+        [string]$CompanyName
+    )
+
+    $normalizedTitle = ($Title -replace '\s+', ' ').Trim()
+    $normalizedCompany = ($CompanyName -replace '\s+', ' ').Trim()
+
+    return (
+        $normalizedTitle -eq $normalizedCompany -or
+        $normalizedTitle -match '^\w+ \| .+ Stock Overview' -or
+        $normalizedTitle -match '^\w+ \| .+ Stock Price'
+    )
+}
+
 function Get-FirstWords {
     param(
         [string]$Text,
@@ -151,7 +167,8 @@ function Save-Article {
 
     $articleDate = ([datetimeoffset]::Parse($Article.Published)).LocalDateTime.ToString('yyyy-MM-dd')
     $safeTitle = Get-SafeFileName -Value $Article.Title
-    $baseName = "$articleDate-$Ticker-$safeTitle"
+    $safeSource = Get-SafeFileName -Value $Article.Source
+    $baseName = "$articleDate-$Ticker-$safeSource-$safeTitle"
     $htmlPath = Join-Path -Path $ArticleRoot -ChildPath "$baseName.html"
     $textPath = Join-Path -Path $ArticleRoot -ChildPath "$baseName.txt"
 
@@ -263,8 +280,12 @@ function Get-NewsCatalysts {
                     }
                 } |
                 Where-Object {
-                    $_.Title -match [regex]::Escape($Ticker) -or
-                    (-not [string]::IsNullOrWhiteSpace($companyKeyword) -and $_.Title -match [regex]::Escape($companyKeyword))
+                    $searchText = "$($_.Title) $($_.Description)"
+                    -not (Test-GenericQuotePageTitle -Title $_.Title -CompanyName $CompanyName) -and
+                    (
+                        $searchText -match [regex]::Escape($Ticker) -or
+                        (-not [string]::IsNullOrWhiteSpace($companyKeyword) -and $searchText -match [regex]::Escape($companyKeyword))
+                    )
                 } |
                 Select-Object -First $Limit
         )
