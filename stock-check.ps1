@@ -1,7 +1,7 @@
 param(
     [string[]]$Symbols = @('AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'NVDA', 'TSLA', 'AMD', 'CRWV', 'ARM', 'MU'),
     [int]$NewsPerTicker = 10,
-    [string]$ArticleRoot = (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'StockCheckArticles')
+    [string]$ArticleRoot = (Join-Path (Join-Path $env:USERPROFILE 'Documents') 'StockCheckArticles')
 )
 
 $ErrorActionPreference = 'Stop'
