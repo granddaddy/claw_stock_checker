@@ -1,0 +1,24 @@
+Run the saved stock-check script at `C:\Users\micngu\OneDrive - Microsoft\Documents\Clawpilot\Scratchpad\claw_stock_checker\stock-check.ps1` and output its markdown table exactly. Please out the table as html markdown with all the stocks regardless of percentage change. The analysis step should only output ticker, latest price, and intraday movement. Do not do sentiment analysis, article lookup, article download, or article summarization. Edit the script for future iterations rather than duplicating logic in this prompt. Output ONLY the result — no preamble, thought process, or narration. Always send to the Scout chat instead of Teams self-chat.
+
+1. For every ticker in the analysis step with an absolute intraday change greater than 2%:
+
+i. Create the exact prompt:
+"{TICKER} moved {INTRADAY_PERCENT} today. Why?"
+
+Ask GPT-6.1 Sol using only that exact prompt as the question and no additional context. Do not include the analysis table, source names, hidden context, or any other data in the question text sent to GPT-6.1 Sol .
+
+Agent tool-use policy (this is a delivery-mechanism instruction for the sub-agent, NOT part of the prompt text and must never appear in the Teams message): the sub-agent MUST use web search / web fetch to ground its answer in today's actual market news before responding. It must NOT decline, hedge, or reply that it lacks access to real-time market data, news feeds, or quote services — it has browsing tools and is required to use them. It must also correctly identify what the ticker actually is (look it up rather than guessing; e.g. DRAM is the Roundhill Memory ETF, not Lam Research). If a first attempt still returns a refusal or a "no access to real-time data" style response, re-ask once and use the grounded second response.
+
+ii. Take the output of the previous step and ask Claude Sonnet and create the exact prompt:
+"Is this true? {TICKER} moved {INTRADAY_PERCENT} today. {OUTPUT_FROM_STEP_1}"
+
+2. For each >2% ticker, include the exact prompt and Claude's and GPT's complete output verbatim in the Teams message. Structure each ticker as:
+
+Title: {TICKER} moved {INTRADAY_PERCENT} today to {PRICE}
+Prompt: "{TICKER} moved {INTRADAY_PERCENT} today. Why?"
+Claude output: {entire GPT-6.1 Solresponse}
+
+Prompt: "Is this true?"
+Claude output: {entire Claude Sonnet response}
+
+3: Send the complete summary to the Scout Teams chat (use m_send_teams_message, not the Teams self-chat) with at the end a summary of all the tickers, their intraday change and their latest price from the analysis step. Output ONLY the result — no preamble, thought process, or narration.
