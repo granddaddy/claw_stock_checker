@@ -1,5 +1,5 @@
 param(
-    [string[]]$Symbols = @('AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'NVDA', 'TSLA', 'AMD', 'CRWV', 'ARM', 'MU')
+    [string[]]$Symbols = @('AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'NVDA', 'TSLA', 'AMD', 'CRWV', 'ARM', 'MU', 'SMH', 'DRAM')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,12 +30,20 @@ $rows = foreach ($quote in $quotes) {
 }
 
 $lines = @(
-    '| Ticker | Latest price | Intraday % |',
-    '|---|---:|---:|'
+    '<table>',
+    '  <thead>',
+    '    <tr><th>Ticker</th><th align="right">Latest price</th><th align="right">Intraday %</th></tr>',
+    '  </thead>',
+    '  <tbody>'
 )
 
 foreach ($row in $rows) {
-    $lines += "| **$($row.Ticker)** | $($row.Price) | **$($row.Intraday)** |"
+    $lines += "    <tr><td><strong>$($row.Ticker)</strong></td><td align=""right"">$($row.Price)</td><td align=""right""><strong>$($row.Intraday)</strong></td></tr>"
 }
+
+$lines += @(
+    '  </tbody>',
+    '</table>'
+)
 
 $lines -join [Environment]::NewLine
